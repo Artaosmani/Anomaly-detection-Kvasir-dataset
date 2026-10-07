@@ -2,7 +2,7 @@
 
 Examples:
     python YOLO/train.py                                   # use Configs/default.yml
-    python YOLO/train.py --model yolo26s.pt --epochs 200
+    python YOLO/train.py --epochs 200 --imgsz 640
     python YOLO/train.py --set lr0=0.005 mosaic=0.5 cache=false
     python YOLO/train.py --resume runs/yolo26_kvasir/weights/last.pt
     python YOLO/train.py --dry-run                         # print resolved config and exit
@@ -10,6 +10,7 @@ Examples:
 import argparse
 import json
 import random
+import shutil
 import sys
 from pathlib import Path
 
@@ -30,7 +31,7 @@ TRAIN_SECTIONS = ("train", "augment", "output")
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="YAML config file")
-    p.add_argument("--model", help="override model (e.g. yolo26s.pt)")
+    p.add_argument("--model", help="override model yaml (e.g. Configs/yolo26n.yaml)")
     p.add_argument("--epochs", type=int)
     p.add_argument("--batch", type=int)
     p.add_argument("--imgsz", type=int)
@@ -92,17 +93,18 @@ def seed_everything(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def ensure_dataset(cfg):
-    data_yaml = data_yaml_path(cfg)
-    if not data_yaml.exists():
-        print(f"[data] {data_yaml} missing, preparing dataset...")
-        prepare(cfg)
-    data = yaml.safe_load(data_yaml.read_text())
-    for split in ("train", "val", "test"):
-        n = len(list((Path(data["path"]) / data[split]).glob("*.jpg")))
-        print(f"[data] {split:5s}: {n} images")
-        if split != "test" and n == 0:
-            raise SystemExit(f"No images found for split '{split}' — re-run `python YOLO/src.py`")
+def results_dir(cfg, save_dir):
+    """results/<run name>/ — mirrors runs/<run name>/ but holds the images."""
+    return resolve(cfg["paths"]["results"]) / save_dir.name
+
+
+def move_images(src, dst):
+    """Training writes plots next to the weights; move every png/jpg into the results folder."""
+    dst.mkdir(parents=True, exist_ok=True)
+    for f in src.glob("*"):
+        if f.suffix in (".png", ".jpg"):
+            shutil.move(str(f), dst / f.name)
+    print(f"[results] images -> {dst}")
 
 
 def print_config(cfg, kwargs):
@@ -120,9 +122,10 @@ def train(cfg, kwargs, resume=None):
         model = YOLO(str(resume))
         model.train(resume=True)
     else:
-        model = YOLO(cfg["model"])
+        model = YOLO(str(resolve(cfg["model"])))
         model.train(**kwargs)
     save_dir = Path(model.trainer.save_dir)
+    move_images(save_dir, results_dir(cfg, save_dir))
     (save_dir / "config_resolved.yaml").write_text(yaml.safe_dump({**cfg, "resolved_train_kwargs": kwargs}, sort_keys=False))
     return save_dir, Path(model.trainer.best)
 
@@ -135,7 +138,8 @@ def evaluate(cfg, kwargs, weights, save_dir):
     m = YOLO(str(weights)).val(data=kwargs["data"], split=ev["split"], imgsz=kwargs["imgsz"],
                                batch=kwargs["batch"] if kwargs["batch"] > 0 else 16,
                                conf=ev.get("conf", 0.001), iou=ev.get("iou", 0.6), device=kwargs["device"],
-                               project=str(save_dir), name=f"eval_{ev['split']}", plots=True)
+                               project=str(results_dir(cfg, save_dir)), name=f"eval_{ev['split']}",
+                               exist_ok=True, plots=True)
     metrics = {
         "split": ev["split"],
         "precision": float(m.box.mp),
@@ -165,7 +169,7 @@ def main():
         return
 
     seed_everything(kwargs.get("seed", 0))
-    ensure_dataset(cfg)
+    prepare(cfg)  # checks images/labels pair up and (re)writes data.yaml
     save_dir, best = train(cfg, kwargs, resume=args.resume)
     print(f"[train] done, best weights: {best}")
 

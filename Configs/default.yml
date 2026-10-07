@@ -1,24 +1,18 @@
-# YOLO26 polyp detection on Kvasir-SEG — the single config for src.py and train.py.
-# Relative paths are relative to the project root (Anomaly_detection/).
+# YOLO26 polyp detection on Kvasir-SEG — the single config for src.py, train.py and visualize.py.
+# Relative paths are relative to the project root.
 # Any train/augment/output key can be overridden from the CLI:
 #   python YOLO/train.py --set lr0=0.005 epochs=50
 
 paths:
-  images: Data/Kvasir-SEG/images       # original Kvasir-SEG jpgs (input)
-  labels: labels/kavsir_bboxes.json    # bounding boxes per image id (input)
-  dataset: Data/yolo                   # YOLO-format dataset built by `python YOLO/src.py` (output)
-                                       #   -> Data/yolo/{images,labels}/{train,val,test} + Data/yolo/data.yaml
+  dataset: Data/kvasir-seg-split       # already split: {images,labels}/{train,val,test}; src.py writes data.yaml here
+  labels: labels/kavsir_bboxes.json    # original bounding boxes (used by visualize.py for ground truth)
+  results: results                     # plots/images go to results/<run name>/, weights stay in runs/<run name>/weights
 
-split:
-  seed: 0                              # same seed = same train/val/test split every time
-  train: 0.8
-  val: 0.1                             # test gets the remainder (0.1)
-
-model: yolo26n.pt                      # yolo26{n,s,m,l,x}.pt (pretrained) or yolo26n.yaml (from scratch)
+model: Configs/yolo26n.yaml            # architecture to edit; the 'n' in the filename picks the scale (n/s/m/l/x)
 
 train:
   epochs: 5
-  imgsz: 336
+  imgsz: 352               # must be a multiple of 32
   batch: 16                # -1 = auto batch (CUDA only)
   patience: 30             # early stopping, epochs without val improvement
   device: auto             # auto | cpu | mps | 0 | 0,1
@@ -27,7 +21,7 @@ train:
   deterministic: true
   cache: ram               # false | ram | disk  (800 images fit easily in RAM)
   amp: true
-  pretrained: true
+  pretrained: yolo26n.pt  # weights copied into the yaml model where layers match; false = from scratch
   freeze: null             # e.g. 10 to freeze the first 10 layers
   single_cls: true
 
