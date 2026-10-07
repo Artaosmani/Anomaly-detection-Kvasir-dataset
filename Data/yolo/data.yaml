@@ -1,4 +1,4 @@
-path: /Users/artaosmani/Anomaly_detection/Data/yolo
+path: /Users/artaosmani/Anomaly-detection-Kvasir-dataset/Data/yolo
 train: images/train
 val: images/val
 test: images/test

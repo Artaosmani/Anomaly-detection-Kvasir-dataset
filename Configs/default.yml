@@ -17,8 +17,8 @@ split:
 model: yolo26n.pt                      # yolo26{n,s,m,l,x}.pt (pretrained) or yolo26n.yaml (from scratch)
 
 train:
-  epochs: 150
-  imgsz: 640
+  epochs: 5
+  imgsz: 336
   batch: 16                # -1 = auto batch (CUDA only)
   patience: 30             # early stopping, epochs without val improvement
   device: auto             # auto | cpu | mps | 0 | 0,1
