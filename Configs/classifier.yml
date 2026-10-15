@@ -1,0 +1,68 @@
+# Binary polyp classifier (polyp yes/no, no boxes) for the nRF54LM20 Axon NPU — the single config for Classifier/*.py.
+# Relative paths are relative to the project root.
+# Any key can be overridden from the CLI, by name or by dotted path:
+#   python Classifier/train.py --set imgsz=84 dropout=0.3 stage2.epochs=10
+
+paths:
+  positives: Data/kvasir-seg-split/images    # {train,val,test}/*.jpg, the same split as YOLO26n
+  boxes: labels/kavsir_bboxes.json           # polyp boxes, used for hard-negative crops
+  capsule_polyps: Data/kvasir-capsule/polyp  # optional: Kvasir-Capsule polyp frames, only for the domain-shift eval
+
+negatives:
+  # Every image under each dir (recursive) is a "no polyp" frame. Missing or empty dirs are skipped.
+  # Lower GI only: z-line / pylorus are upper GI and must not be the main negatives.
+  sources:
+    - dir: Data/negatives/hyperkvasir        # HyperKvasir labelled: cecum, ileum, bbps-0-1, bbps-2-3
+    - dir: Data/negatives/kvasir-capsule     # Kvasir-Capsule labelled: "Normal clean mucosa"
+      video_regex: '^(?P<video>[0-9a-f]+)_(?P<frame>\d+)$'  # filename stem -> video id + frame number
+      stride: 15                             # keep one frame per 15 (2 fps video exported at 30 fps)
+      capsule: true                          # these frames feed the Kvasir-Capsule-only eval
+    - dir: Data/kvasir/kvasir-dataset/normal-cecum   # Kvasir v1, already on disk (overlaps HyperKvasir; de-duplicated)
+  split: [0.8, 0.1, 0.1]     # train/val/test, seeded, whole videos per split
+  hard_negatives: false      # add random crops of Kvasir-SEG train images that miss every polyp box
+  hard_per_image: 1
+  hard_side: [0.25, 0.5]     # crop side as a fraction of min(height, width)
+
+model:
+  imgsz: 96                  # 96 | 84  (84 = 1/4-scale JPEG decode of the 336×336 frame, no extra resize)
+  alpha: 0.25                # MobileNetV1 width multiplier
+  dropout: 0.2
+  weights: imagenet          # imagenet | null
+
+augment:
+  # colour: keep hue shift small, mucosa colour is diagnostic (same values as Configs/default.yml)
+  hsv_h: 0.01
+  hsv_s: 0.5
+  hsv_v: 0.3
+  # geometry: endoscopy has no canonical orientation
+  degrees: 15.0
+  flipud: 0.5
+  fliplr: 0.5
+  # black out the bottom-left scope-guide inset (both classes) so it can't become a shortcut
+  inset_mask: 0.5
+  inset_box: [0.0, 0.65, 0.3, 1.0]   # x0, y0, x1, y1 as fractions
+
+train:
+  seed: 0
+  batch: 32
+  patience: 8                # early stopping on val AUC, per stage
+  stage1: {epochs: 15, lr: 0.001}    # backbone frozen, head only
+  stage2: {epochs: 40, lr: 0.0001}   # backbone unfrozen
+  freeze_bn: true            # keep BatchNorm statistics frozen in stage 2 (small dataset)
+
+quantize:
+  representative: 300        # train images (no augmentation) used to calibrate INT8 ranges
+  max_recall_drop: 0.02      # QAT if INT8 val recall at the float threshold drops more than this
+  qat_epochs: 10
+  qat_lr: 0.00002
+
+threshold:
+  target_recall: 0.95        # picked on val: a missed polyp never reaches YOLO, a false alarm costs one YOLO run
+
+output:
+  project: runs              # runs/<name>/
+  name: classifier
+  exist_ok: false            # false = runs/classifier-2, -3, ... instead of overwriting
+
+evaluate:
+  timing_runs: 200           # PC TFLite interpreter timing (sanity check only, NOT board latency)

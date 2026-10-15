@@ -1,0 +1,7 @@
+# Polyp classifier (Classifier/), installed into the same env as YOLO26n (anomaly_detection, Python 3.11)
+tensorflow>=2.21
+tf-keras>=2.21                       # Keras 2, needed by tensorflow-model-optimization (QAT)
+tensorflow-model-optimization>=0.8
+scikit-learn
+pillow
+pyyaml

@@ -28,22 +28,6 @@ TRAIN_SECTIONS = ("train", "augment", "output")
 
 # ---------------------------------------------------------------- config
 
-def parse_args():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="YAML config file")
-    p.add_argument("--model", help="override model yaml (e.g. Configs/yolo26n.yaml)")
-    p.add_argument("--epochs", type=int)
-    p.add_argument("--batch", type=int)
-    p.add_argument("--imgsz", type=int)
-    p.add_argument("--device", help="auto | cpu | mps | 0 | 0,1")
-    p.add_argument("--name", help="run name under output.project")
-    p.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE",
-                   help="override any train/augment/output key, e.g. --set lr0=0.005 mosaic=0")
-    p.add_argument("--resume", type=Path, help="resume from a last.pt checkpoint")
-    p.add_argument("--no-eval", action="store_true", help="skip test-split evaluation")
-    p.add_argument("--dry-run", action="store_true", help="print resolved config and exit")
-    return p.parse_args()
-
 
 def load_config(args):
     cfg = yaml.safe_load(args.config.read_text())
@@ -118,14 +102,12 @@ def print_config(cfg, kwargs):
 
 def train(cfg, kwargs, resume=None):
     if resume:
-        print(f"[train] resuming from {resume}")
         model = YOLO(str(resume))
         model.train(resume=True)
     else:
-        model = YOLO(str(resolve(cfg["model"])))
+        model = YOLO(cfg["model"])
         model.train(**kwargs)
     save_dir = Path(model.trainer.save_dir)
-    move_images(save_dir, results_dir(cfg, save_dir))
     (save_dir / "config_resolved.yaml").write_text(yaml.safe_dump({**cfg, "resolved_train_kwargs": kwargs}, sort_keys=False))
     return save_dir, Path(model.trainer.best)
 
@@ -138,15 +120,13 @@ def evaluate(cfg, kwargs, weights, save_dir):
     m = YOLO(str(weights)).val(data=kwargs["data"], split=ev["split"], imgsz=kwargs["imgsz"],
                                batch=kwargs["batch"] if kwargs["batch"] > 0 else 16,
                                conf=ev.get("conf", 0.001), iou=ev.get("iou", 0.6), device=kwargs["device"],
-                               project=str(results_dir(cfg, save_dir)), name=f"eval_{ev['split']}",
-                               exist_ok=True, plots=True)
+                               project=str(save_dir), name=f"eval_{ev['split']}", plots=True)
     metrics = {
         "split": ev["split"],
         "precision": float(m.box.mp),
         "recall": float(m.box.mr),
         "mAP50": float(m.box.map50),
-        "mAP50-95": float(m.box.map),
-        "fitness": float(m.fitness),
+        "mAP50-95": float(m.box.map)
     }
     (save_dir / f"metrics_{ev['split']}.json").write_text(json.dumps(metrics, indent=2))
     print("[eval]", json.dumps(metrics, indent=2))
@@ -169,13 +149,30 @@ def main():
         return
 
     seed_everything(kwargs.get("seed", 0))
-    prepare(cfg)  # checks images/labels pair up and (re)writes data.yaml
     save_dir, best = train(cfg, kwargs, resume=args.resume)
     print(f"[train] done, best weights: {best}")
 
     if not args.no_eval:
         evaluate(cfg, kwargs, best, save_dir)
     export(cfg, best)
+
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="YAML config file")
+    p.add_argument("--model", help="override model (e.g. yolo26s.pt)")
+    p.add_argument("--epochs", type=int)
+    p.add_argument("--batch", type=int)
+    p.add_argument("--imgsz", type=int)
+    p.add_argument("--device", help="auto | cpu | mps | 0 | 0,1")
+    p.add_argument("--name", help="run name under output.project")
+    p.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE",
+                   help="override any train/augment/output key, e.g. --set lr0=0.005 mosaic=0")
+    p.add_argument("--resume", type=Path, help="resume from a last.pt checkpoint")
+    p.add_argument("--no-eval", action="store_true", help="skip test-split evaluation")
+    p.add_argument("--dry-run", action="store_true", help="print resolved config and exit")
+    return p.parse_args()
 
 
 if __name__ == "__main__":

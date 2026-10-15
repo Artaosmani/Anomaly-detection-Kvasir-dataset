@@ -2,3 +2,9 @@ __pycache__/
 .DS_Store
 *.cache
 /yolo26n.pt
+
+# classifier: weights and exports stay out of git
+*.h5
+*.keras
+*.tflite
+runs/classifier*/
