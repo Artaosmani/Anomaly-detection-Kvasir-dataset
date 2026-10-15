@@ -122,8 +122,23 @@ def train(model, cfg, samples, out):
 def qat(model, cfg, train_ds, val_ds, out):
     """Quantisation-aware fine-tuning, used only when post-training INT8 loses too much recall."""
     import tensorflow_model_optimization as tfmot
+    tq = tfmot.quantization.keras
     q = cfg["quantize"]
-    qmodel = tfmot.quantization.keras.quantize_model(model)
+
+    class PassThrough(tq.QuantizeConfig):
+        """No own output quantiser: the pool keeps its input's scale, so no int8 -> int8 QUANTIZE op after it."""
+        def get_weights_and_quantizers(self, layer): return []
+        def get_activations_and_quantizers(self, layer): return []
+        def set_quantize_weights(self, layer, w): pass
+        def set_quantize_activations(self, layer, a): pass
+        def get_output_quantizers(self, layer): return []
+        def get_config(self): return {}
+
+    annotated = keras.models.clone_model(model, clone_function=lambda l: tq.quantize_annotate_layer(
+        l.__class__.from_config(l.get_config()), PassThrough() if l.name == "pool" else None))
+    annotated.set_weights(model.get_weights())
+    with tq.quantize_scope({"PassThrough": PassThrough}):
+        qmodel = tq.quantize_apply(annotated)
     fit(qmodel, cfg, train_ds, val_ds, q["qat_epochs"], q["qat_lr"], out / "qat.weights.h5")
     return qmodel
 
@@ -307,8 +322,10 @@ def main():
         qmodel = qat(model, cfg, train_ds, val_ds, out)
         int8 = to_int8(qmodel, cfg, samples, tfl)
         _, qv = scores(samples["val"], cfg, int8=int8)
-        drop = metrics(yv, fv, t_float)["recall"] - metrics(yv, int8.logit(qv), t_float)["recall"]
-        print(f"[int8] after QAT: drop {drop * 100:.1f} points")
+        _, fq = scores(samples["val"], cfg, model=qmodel)  # QAT shifts the logits: compare with its own float output
+        t_qat = pick_threshold(yv, fq, target)
+        drop = metrics(yv, fq, t_qat)["recall"] - metrics(yv, int8.logit(qv), t_qat)["recall"]
+        print(f"[int8] after QAT: drop {drop * 100:.1f} points vs the QAT float model")
 
     t_raw = int(pick_threshold(yv, qv, target))
     thr = {"target_recall": target,

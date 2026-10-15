@@ -8,6 +8,12 @@ paths:
   boxes: labels/kavsir_bboxes.json           # polyp boxes, used for hard-negative crops
   capsule_polyps: Data/kvasir-capsule/polyp  # optional: Kvasir-Capsule polyp frames, only for the domain-shift eval
 
+extra_positives:
+  # More polyp images, split like the negatives. Needed so both classes share the same image format: with only
+  # Kvasir-SEG positives (cropped) vs Kvasir v1 negatives (720x576), the model learned the format, not the polyp.
+  sources:
+    - dir: Data/kvasir/kvasir-dataset/polyps         # Kvasir v1; images that are also in Kvasir-SEG are dropped
+
 negatives:
   # Every image under each dir (recursive) is a "no polyp" frame. Missing or empty dirs are skipped.
   # Lower GI only: z-line / pylorus are upper GI and must not be the main negatives.
@@ -18,7 +24,9 @@ negatives:
       stride: 15                             # keep one frame per 15 (2 fps video exported at 30 fps)
       capsule: true                          # these frames feed the Kvasir-Capsule-only eval
     - dir: Data/kvasir/kvasir-dataset/normal-cecum   # Kvasir v1, already on disk (overlaps HyperKvasir; de-duplicated)
-  split: [0.8, 0.1, 0.1]     # train/val/test, seeded, whole videos per split
+    - dir: Data/kvasir/kvasir-dataset/ulcerative-colitis      # inflamed colon, no polyp
+    - dir: Data/kvasir/kvasir-dataset/dyed-resection-margins  # site of a removed polyp, blue dye: a hard negative
+  split: [0.8, 0.1, 0.1]     # train/val/test for negatives and extra positives, seeded, whole videos per split
   hard_negatives: false      # add random crops of Kvasir-SEG train images that miss every polyp box
   hard_per_image: 1
   hard_side: [0.25, 0.5]     # crop side as a fraction of min(height, width)

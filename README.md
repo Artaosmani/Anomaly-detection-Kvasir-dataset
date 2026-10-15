@@ -36,8 +36,16 @@ These aren't in the repo; download and unpack them yourself:
   `<video>_<frame>.jpg` names so frames are thinned to one per 15 and each video stays in one split
 - Kvasir-Capsule `Polyp` frames → `Data/kvasir-capsule/polyp/` (only used for the domain-shift eval, never for training)
 
-Until then, training uses Kvasir v1 `normal-cecum` (already in `Data/kvasir/`). Identical frames across sources are
-dropped by image hash. Upper-GI classes (z-line, pylorus) are deliberately not used as negatives.
+Until then, training uses Kvasir v1 `normal-cecum`, `ulcerative-colitis` and `dyed-resection-margins` (already in
+`Data/kvasir/`). Identical frames across sources are dropped by image hash. Upper-GI classes (z-line, pylorus) are
+deliberately not used as negatives.
+
+### Extra positives
+
+`extra_positives.sources` adds Kvasir v1 `polyps` (minus the images that are also in Kvasir-SEG), split the same way
+as the negatives. Without them every polyp was a cropped Kvasir-SEG image and every negative a 720×576 Kvasir v1
+image. The model then learned the image format instead of the polyp: 0.98 recall on its own test split, but only
+0.14 on held-out Kvasir v1 polyps. With polyps in both formats, the format no longer predicts the answer.
 
 ### Train and export
 
@@ -90,6 +98,19 @@ frame_id,t_rx_board_ns,t_infer_start_ns,t_infer_end_ns,t_sent_ns,score,detected
 YOLO26n results join on it. On the PC the timestamps come from the host clock; the board will send the same columns.
 `score` is the sigmoid of the dequantised logit, and `detected` uses the int8 threshold from `threshold.json`.
 
+### Held-out test set
+
+`Data/test/images/test_0001..0100.jpg` holds 50 polyp and 50 no-polyp images that were moved out of
+`Data/kvasir/kvasir-dataset/` (Kvasir v1 `polyps`, `normal-cecum`, `ulcerative-colitis`, `dyed-resection-margins`),
+so no training run can see them. `Data/test/labels.csv` has `frame_id,file,polyp,source`, where `polyp` is 1/0 and
+`source` is the original path. None of these images duplicates a Kvasir-SEG image or another image left behind.
+
+```bash
+python Classifier/run_csv.py --frames Data/test/images --labels Data/test/labels.csv --model runs/classifier/model_int8.tflite
+```
+
+This writes the CSV plus `<csv>.metrics.json` (recall, precision, F1, specificity, AUC, confusion matrix).
+
 ### Design choices for the NPU
 
 - Keras' own MobileNet pads with `ZeroPadding2D` (a `PAD` op), and `GlobalAveragePooling2D` exports as `MEAN`.
@@ -101,8 +122,9 @@ YOLO26n results join on it. On the PC the timestamps come from the host clock; t
 - The size is about 297 KB (218,801 params), above the ~250 KB target. Per-channel quantisation parameters and
   flatbuffer metadata add to the 214 KB of int8 weights; this is the same size class as the MLPerf Tiny VWW model,
   and the board has 2 MB of flash.
-- If QAT is triggered (INT8 val recall more than 2 points below float), the QAT export starts with a `QUANTIZE`
-  (int8 → int8 requantise) op on the input. `train.py` flags it.
+- QAT runs when INT8 val recall is more than 2 points below float. By default QAT gives the average pool its own
+  output quantiser, which exports as an extra int8 → int8 `QUANTIZE` op (not an Axon op). `train.py` turns that
+  quantiser off, so the QAT export uses the same three ops. `train.py` still warns if any other op appears.
 
 ### Still open
 
@@ -111,5 +133,5 @@ YOLO26n results join on it. On the PC the timestamps come from the host clock; t
 - USB transfer: one result line per frame plus the frame for `detected=1`, over the J3 high-speed USB port.
 - Real latency on the board: measure on the nRF54LM20 DK; Nordic's figure for this architecture at 96×96 is
   about 14.4 ms on Axon.
-- Real negatives: with only Kvasir v1 normal-cecum, polyp vs. no-polyp is too easy (different source images,
-  val AUC close to 1). The numbers mean little until HyperKvasir and Kvasir-Capsule negatives are in.
+- Capsule data: all training images are colonoscopy frames. How well the model works on capsule frames is unknown
+  until the Kvasir-Capsule frames are in and `metrics_capsule.json` exists.

@@ -3,7 +3,8 @@
 python Classifier/data.py [--config Configs/classifier.yml]   # print split sizes without training
 
 A sample is (path, label, box): label 1 = polyp, box = crop (y0, x0, y1, x1) as fractions, FULL = whole image.
-Positives keep the Kvasir-SEG train/val/test assignment; negatives get a seeded split with whole videos per split.
+Kvasir-SEG positives keep their train/val/test assignment; extra positives and negatives get a seeded split with
+whole videos per split. An image (by hash) is used once at most.
 """
 import argparse
 import json
@@ -66,15 +67,17 @@ def thin_video(files, regex, stride):
     return groups
 
 
-def negatives(cfg):
-    """Scan negatives.sources, thin videos, drop duplicates, split by group. Returns ({split: samples}, capsule paths)."""
-    neg = cfg["negatives"]
-    groups, capsule, seen = defaultdict(list), set(), set()
-    for src in neg["sources"]:
+def scan(cfg, sources, label, seen, name):
+    """Scan folders, thin videos, drop images already in `seen` (hashes), split by group (seeded).
+
+    Returns ({split: samples}, capsule paths). `seen` is updated, so later calls never reuse an image.
+    """
+    groups, capsule = defaultdict(list), set()
+    for src in sources:
         d = resolve(src["dir"])
         files = sorted(p for p in d.rglob("*") if p.suffix.lower() in IMG_EXT) if d.is_dir() else []
         if not files:
-            print(f"[data] negatives: {src['dir']} missing or empty, skipped")
+            print(f"[data] {name}: {src['dir']} missing or empty, skipped")
             continue
         kept = thin_video(files, src["video_regex"], src.get("stride", 1)) if src.get("video_regex") \
             else {p: str(p) for p in files}
@@ -88,17 +91,16 @@ def negatives(cfg):
             n += 1
             if src.get("capsule"):
                 capsule.add(str(p))
-        print(f"[data] negatives: {src['dir']}: {len(files)} files -> {n} kept")
-    if not groups:
-        raise SystemExit(NEGATIVES_HELP)
+        print(f"[data] {name}: {src['dir']}: {len(files)} files -> {n} kept")
 
     keys = sorted(groups)
     random.Random(cfg["train"]["seed"]).shuffle(keys)
-    total, ends = sum(map(len, groups.values())), np.cumsum(neg["split"]) / np.sum(neg["split"])
+    split = cfg["negatives"]["split"]
+    total, ends = sum(map(len, groups.values())), np.cumsum(split) / np.sum(split)
     out, count = {s: [] for s in SPLITS}, 0
     for k in keys:
-        split = SPLITS[min(int(np.searchsorted(ends, count / total, side="right")), 2)]
-        out[split] += [(p, 0, FULL) for p in groups[k]]
+        s = SPLITS[min(int(np.searchsorted(ends, count / total, side="right")), 2)]
+        out[s] += [(p, label, FULL) for p in groups[k]]
         count += len(groups[k])
     return out, capsule
 
@@ -127,8 +129,12 @@ def hard_negatives(cfg, train_pos):
 def build_samples(cfg):
     """{split: samples} plus the Kvasir-Capsule eval set (empty if those frames aren't there)."""
     pos = positives(cfg)
-    neg, capsule = negatives(cfg)
-    samples = {s: pos[s] + neg[s] for s in SPLITS}
+    seen = {image_hash(p) for split in pos.values() for p, _, _ in split}  # extra images must not repeat Kvasir-SEG
+    extra, _ = scan(cfg, (cfg.get("extra_positives") or {}).get("sources") or [], 1, seen, "extra positives")
+    neg, capsule = scan(cfg, cfg["negatives"]["sources"], 0, seen, "negatives")
+    if not any(neg.values()):
+        raise SystemExit(NEGATIVES_HELP)
+    samples = {s: pos[s] + extra[s] + neg[s] for s in SPLITS}
     if cfg["negatives"]["hard_negatives"]:
         hard = hard_negatives(cfg, pos["train"])
         samples["train"] += hard
